@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <meta name="theme-color" content="#111318" />
-<title>CueDeck V1.8 — Browser Audio Cue Player</title>
+<title>CueDeck V1.9 — Browser Audio Cue Player</title>
 <style>
   :root{
     --bg:#0d0f13;
@@ -150,22 +150,39 @@
   .inspector-body{overflow:auto;padding:12px}
   .selected-name{font-size:18px;font-weight:850;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .selected-file{font-size:11px;color:var(--muted);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .wave-editor{margin:12px 0}
+  .wave-overview-wrap{
+    height:48px;background:#0e1015;border:1px solid #2a303b;border-radius:10px 10px 0 0;
+    position:relative;overflow:hidden;border-bottom:0;
+  }
+  #waveOverview{width:100%;height:100%;display:block;cursor:pointer;touch-action:none;user-select:none}
   .wave-wrap{
-    margin:12px 0;background:#101217;border:1px solid #2a303b;border-radius:12px;
-    height:108px;position:relative;overflow:hidden;
+    margin:0;background:#101217;border:1px solid #2a303b;border-radius:0 0 12px 12px;
+    height:158px;position:relative;overflow:hidden;
   }
   #waveform{width:100%;height:100%;display:block;cursor:crosshair;touch-action:none;user-select:none}
   .wave-help{
     position:absolute;left:50%;bottom:6px;transform:translateX(-50%);
-    padding:3px 7px;border-radius:7px;background:rgba(0,0,0,.5);
+    padding:3px 7px;border-radius:7px;background:rgba(0,0,0,.56);
     color:#aeb8c6;font-size:9px;font-weight:750;pointer-events:none;white-space:nowrap;
   }
   .wave-label{
     position:absolute;top:7px;padding:3px 7px;border-radius:7px;
-    background:rgba(0,0,0,.58);font-size:10px;font-weight:800;color:#d8dee8;
+    background:rgba(0,0,0,.62);font-size:10px;font-weight:800;color:#d8dee8;pointer-events:none;
   }
   .wave-label.in{left:7px}
   .wave-label.out{right:7px}
+  .wave-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:7px}
+  .wave-toolbar .btn{min-height:30px;padding:0 9px;font-size:11px}
+  .wave-readout{margin-left:auto;font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums;font-weight:800}
+  .wave-nudge{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px}
+  .wave-nudge-group{display:grid;grid-template-columns:auto 1fr 1fr;gap:5px;align-items:center;background:#151922;border:1px solid #2e3541;border-radius:9px;padding:5px 7px}
+  .wave-nudge-group span{font-size:9px;font-weight:900;letter-spacing:.08em;color:var(--muted)}
+  .wave-nudge-group .btn{min-height:27px;padding:0 7px;font-size:10px}
+  .cue-status{display:inline-flex;align-items:center;gap:5px;padding:3px 6px;border-radius:999px;font-size:9px;font-weight:900;letter-spacing:.06em}
+  .cue-status.ready{background:#143122;color:#8ce2ae}
+  .cue-status.loading{background:#2b2517;color:#ffd981}
+  .cue-status.missing{background:#351c22;color:#ffb4bb}
   .section-title{
     margin:16px 0 8px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#9ea8b7;font-weight:900;
   }
@@ -250,10 +267,7 @@
   .pad-view .cue-list.pad-fit .cue{height:100%;min-height:0}
   .pad-view .cue-main{flex:1 1 auto;min-width:0;min-height:0;max-width:100%;overflow:hidden}
   .pad-view .cue-title,.pad-view .cue-meta{min-width:0;max-width:100%}
-  .pad-view .cue-title{
-    font-size:var(--pad-title-size,15px);white-space:normal;line-height:1.08;
-    overflow:hidden;text-overflow:clip;overflow-wrap:anywhere;word-break:break-word;
-  }
+  .pad-view .cue-title{font-size:var(--pad-title-size,15px)}
   .pad-view .cue-meta{font-size:var(--pad-meta-size,11px);gap:var(--pad-meta-gap,8px);flex-wrap:wrap;white-space:normal;overflow:hidden}
   .pad-view .cue-num{
     height:var(--pad-num-height,32px);width:var(--pad-num-width,52px);
@@ -304,7 +318,8 @@
     .cue-num{height:44px;font-size:16px}
     .icon-btn{width:32px;height:32px}
     .inspector-body{padding:8px}
-    .wave-wrap{height:82px;margin:8px 0}
+    .wave-overview-wrap{height:42px}
+    .wave-wrap{height:116px;margin:0}
     .section-title{margin:10px 0 6px}
     .control-grid{gap:6px}
     .control{padding:7px}
@@ -323,7 +338,8 @@
     .topbar{min-height:46px}
     .transport{min-height:76px}
     .show-mode .transport{min-height:88px}
-    .wave-wrap{height:68px}
+    .wave-overview-wrap{height:34px}
+    .wave-wrap{height:72px}
   }
   @media(max-width:1200px) and (min-width:761px){
     .topbar{
@@ -360,7 +376,7 @@
       <div class="logo">CD</div>
       <div>
         <h1>CueDeck</h1>
-        <p>Browser audio cue player</p>
+        <p>Browser audio cue player · v1.9</p>
       </div>
     </div>
     <div class="master-control" title="Master output level">
@@ -415,11 +431,29 @@
         </div>
 
         <div id="cueEditor" class="hidden">
-          <div class="wave-wrap">
-            <canvas id="waveform" title="Drag the IN, OUT and fade handles"></canvas>
-            <span class="wave-label in" id="waveIn">IN 0:00.0</span>
-            <span class="wave-label out" id="waveOut">OUT 0:00.0</span>
-            <span class="wave-help">Drag IN, OUT and fade handles</span>
+          <div class="wave-editor">
+            <div class="wave-overview-wrap">
+              <canvas id="waveOverview" title="Click to centre the detailed waveform"></canvas>
+            </div>
+            <div class="wave-wrap">
+              <canvas id="waveform" title="Drag IN, OUT and fade handles · click to move playhead"></canvas>
+              <span class="wave-label in" id="waveIn">IN 0:00.000</span>
+              <span class="wave-label out" id="waveOut">OUT 0:00.000</span>
+              <span class="wave-help">Drag handles · click to seek · mouse wheel zooms</span>
+            </div>
+            <div class="wave-toolbar">
+              <button class="btn small" id="waveAuditionBtn">▶ Audition</button>
+              <button class="btn small" id="setInBtn">Set IN</button>
+              <button class="btn small" id="setOutBtn">Set OUT</button>
+              <button class="btn small" id="zoomOutBtn">− Zoom</button>
+              <button class="btn small" id="zoomInBtn">+ Zoom</button>
+              <button class="btn small" id="zoomFitBtn">Fit</button>
+              <span class="wave-readout" id="wavePlayhead">PLAYHEAD 0:00.000</span>
+            </div>
+            <div class="wave-nudge">
+              <div class="wave-nudge-group"><span>IN</span><button class="btn small" id="nudgeInBack">−10 ms</button><button class="btn small" id="nudgeInForward">+10 ms</button></div>
+              <div class="wave-nudge-group"><span>OUT</span><button class="btn small" id="nudgeOutBack">−10 ms</button><button class="btn small" id="nudgeOutForward">+10 ms</button></div>
+            </div>
           </div>
 
           <div class="section-title">Cue identity</div>
@@ -587,6 +621,13 @@
     globalTransitionMode: "cue",
     globalTransitionTime: 2,
     waveDrag: null,
+    waveFrame: null,
+    pendingWavePointer: null,
+    wavePeaks: new Map(),
+    waveViews: new Map(),
+    editorPlayheads: new Map(),
+    loadPromises: new Map(),
+    saveTimer: null,
     db: null
   };
 
@@ -594,7 +635,10 @@
     app:$("app"), cueList:$("cueList"), fileInput:$("fileInput"), showInput:$("showInput"),
     dropzone:$("dropzone"), addFilesBtn:$("addFilesBtn"), selectedName:$("selectedName"),
     selectedFile:$("selectedFile"), noSelection:$("noSelection"), cueEditor:$("cueEditor"),
-    waveform:$("waveform"), waveIn:$("waveIn"), waveOut:$("waveOut"),
+    waveform:$("waveform"), waveOverview:$("waveOverview"), waveIn:$("waveIn"), waveOut:$("waveOut"),
+    wavePlayhead:$("wavePlayhead"), waveAuditionBtn:$("waveAuditionBtn"), setInBtn:$("setInBtn"), setOutBtn:$("setOutBtn"),
+    zoomOutBtn:$("zoomOutBtn"), zoomInBtn:$("zoomInBtn"), zoomFitBtn:$("zoomFitBtn"),
+    nudgeInBack:$("nudgeInBack"), nudgeInForward:$("nudgeInForward"), nudgeOutBack:$("nudgeOutBack"), nudgeOutForward:$("nudgeOutForward"),
     cueName:$("cueName"), cueColor:$("cueColor"), hotkeyValue:$("hotkeyValue"),
     gain:$("gain"), gainValue:$("gainValue"), fadeIn:$("fadeIn"), fadeInValue:$("fadeInValue"),
     fadeOut:$("fadeOut"), fadeOutValue:$("fadeOutValue"), fadeCurve:$("fadeCurve"),
@@ -618,6 +662,12 @@
     const s = sec - m * 60;
     return `${m}:${s.toFixed(1).padStart(4,"0")}`;
   };
+  const fmtMs = (sec) => {
+    if (!Number.isFinite(sec) || sec < 0) sec = 0;
+    const m = Math.floor(sec / 60);
+    const s = sec - m * 60;
+    return `${m}:${s.toFixed(3).padStart(6,"0")}`;
+  };
   const hotkeyString = (e) => {
     const parts = [];
     if (e.ctrlKey) parts.push("Ctrl");
@@ -639,7 +689,7 @@
     toast.t = setTimeout(()=>els.toast.classList.remove("show"),2200);
   }
 
-  async function initAudio(){
+  function ensureAudioContext(){
     if (!state.audioContext){
       state.audioContext = new (window.AudioContext || window.webkitAudioContext)();
       state.masterGain = state.audioContext.createGain();
@@ -648,17 +698,23 @@
       state.masterGain.connect(state.analyser).connect(state.audioContext.destination);
       state.masterGain.gain.value = dbToGain(state.masterDb);
     }
-    if (state.audioContext.state === "suspended") await state.audioContext.resume();
+    return state.audioContext;
   }
 
-  function makeCue(file, buffer, id = uid()){
+  async function initAudio(){
+    const ctx=ensureAudioContext();
+    if (ctx.state === "suspended") await ctx.resume();
+  }
+
+  function makeCue(file, buffer=null, id = uid()){
+    const duration=buffer?.duration || 0;
     return {
       id,
       name:file.name.replace(/\.[^.]+$/,""),
       fileName:file.name,
       blob:file,
       buffer,
-      duration:buffer.duration,
+      duration,
       color:"#f4b942",
       hotkey:"",
       gainDb:0,
@@ -667,19 +723,50 @@
       fadeCurve:"linear",
       manualFade:2,
       trimStart:0,
-      trimEnd:buffer.duration,
+      trimEnd:duration,
       loop:false,
       autoFollow:false,
       transitionMode:"none",
       transitionTime:2,
-      missing:false
+      missing:false,
+      loadState:buffer?"ready":"loading"
     };
   }
 
   async function decodeFile(file){
-    await initAudio();
+    const ctx=ensureAudioContext();
     const arrayBuffer = await file.arrayBuffer();
-    return await state.audioContext.decodeAudioData(arrayBuffer.slice(0));
+    return await ctx.decodeAudioData(arrayBuffer.slice(0));
+  }
+
+  function buildPeaks(buffer,bucketCount=32768){
+    if(!buffer?.length)return null;
+    const data=buffer.getChannelData(0);
+    const count=Math.max(256,Math.min(bucketCount,data.length));
+    const mins=new Float32Array(count), maxs=new Float32Array(count);
+    const bucketSize=data.length/count;
+    for(let i=0;i<count;i++){
+      const start=Math.floor(i*bucketSize);
+      const end=Math.max(start+1,Math.floor((i+1)*bucketSize));
+      const stride=Math.max(1,Math.floor((end-start)/64));
+      let min=1,max=-1;
+      for(let j=start;j<end;j+=stride){const v=data[j];if(v<min)min=v;if(v>max)max=v;}
+      const last=data[Math.min(data.length-1,end-1)];if(last<min)min=last;if(last>max)max=last;
+      mins[i]=min;maxs[i]=max;
+    }
+    return {mins,maxs,count};
+  }
+
+  function cachePeaks(cue){
+    if(cue?.buffer && !state.wavePeaks.has(cue.id))state.wavePeaks.set(cue.id,buildPeaks(cue.buffer));
+  }
+
+  async function mapLimit(items,limit,worker){
+    let next=0;
+    const runners=Array.from({length:Math.min(limit,items.length)},async()=>{
+      while(next<items.length){const i=next++;await worker(items[i],i);}
+    });
+    await Promise.all(runners);
   }
 
   async function addFiles(files){
@@ -689,21 +776,71 @@
       /\.(wav|mp3|m4a|aac|ogg|flac|mp4|m4v|mov|webm)$/i.test(f.name)
     );
     if (!list.length){ toast("No supported audio or media files selected."); return; }
-    for (const file of list){
+    const incoming=list.map(file=>makeCue(file));
+    state.cues.push(...incoming);
+    state.selectedId=incoming[incoming.length-1].id;
+    if(!state.armedId)state.armedId=incoming[0].id;
+    render();
+    await mapLimit(incoming,2,async cue=>{
       try{
-        const buffer = await decodeFile(file);
-        const cue = makeCue(file,buffer);
-        state.cues.push(cue);
-        await saveBlob(cue.id,file);
-        state.selectedId = cue.id;
-        if (!state.armedId) state.armedId = cue.id;
-        render();
+        const buffer=await decodeFile(cue.blob);
+        cue.buffer=buffer;cue.duration=buffer.duration;cue.trimEnd=buffer.duration;cue.loadState="ready";cue.missing=false;
+        cachePeaks(cue);
+        await saveBlob(cue.id,cue.blob);
       }catch(err){
-        console.error(err);
-        toast(`Could not decode the audio in ${file.name}. Its codec may not be supported by this browser.`);
+        console.error(err);cue.buffer=null;cue.loadState="missing";cue.missing=true;
       }
+      updateCueRow(cue);
+      if(cue.id===state.selectedId)renderInspector();
+    });
+    saveProject(true);
+    const failed=incoming.filter(c=>c.missing).length;
+    if(failed)toast(`${failed} file${failed===1?"":"s"} could not be decoded.`);
+  }
+
+  async function loadCueFromStorage(cue){
+    if(!cue)return false;
+    if(cue.buffer){cue.loadState="ready";cue.missing=false;cachePeaks(cue);return true;}
+    cue.loadState="loading";cue.missing=false;updateCueRow(cue);
+    const blob=cue.blob || await getBlob(cue.id);
+    if(!blob){cue.blob=null;cue.buffer=null;cue.loadState="missing";cue.missing=true;updateCueRow(cue);if(cue.id===state.selectedId)renderInspector();return false;}
+    try{
+      const buffer=await decodeFile(blob);
+      cue.blob=blob;cue.buffer=buffer;cue.duration=buffer.duration;cue.missing=false;cue.loadState="ready";
+      cue.trimStart=clamp(Number(cue.trimStart)||0,0,Math.max(0,buffer.duration-.01));
+      const existingEnd=Number(cue.trimEnd);
+      cue.trimEnd=clamp(existingEnd>cue.trimStart?existingEnd:buffer.duration,Math.min(buffer.duration,cue.trimStart+.01),buffer.duration);
+      const len=Math.max(0,cue.trimEnd-cue.trimStart);cue.fadeIn=Math.min(Number(cue.fadeIn)||0,len);cue.fadeOut=Math.min(Number(cue.fadeOut)||0,len);
+      cachePeaks(cue);updateCueRow(cue);if(cue.id===state.selectedId)renderInspector();return true;
+    }catch(err){
+      console.error(err);cue.buffer=null;cue.loadState="missing";cue.missing=true;updateCueRow(cue);if(cue.id===state.selectedId)renderInspector();return false;
     }
-    saveProject();
+  }
+
+  async function ensureCueLoaded(cue){
+    if(!cue)return false;
+    if(cue.buffer&&!cue.missing)return true;
+    if(cue.missing&&cue.loadState==="missing"&&!cue.blob)return false;
+    if(state.loadPromises.has(cue.id))return await state.loadPromises.get(cue.id);
+    const promise=loadCueFromStorage(cue).finally(()=>state.loadPromises.delete(cue.id));
+    state.loadPromises.set(cue.id,promise);return await promise;
+  }
+
+  async function hydrateCues(){
+    const priority=[];
+    [state.selectedId,state.armedId].forEach(id=>{const c=getCue(id);if(c&&!priority.includes(c))priority.push(c);});
+    state.cues.forEach(c=>{if(!priority.includes(c))priority.push(c);});
+    await mapLimit(priority,2,async cue=>{if(!cue.buffer&&!cue.missing)await ensureCueLoaded(cue);});
+    saveProject(true);
+  }
+
+  async function preflightShow(){
+    const pending=state.cues.filter(c=>!c.buffer&&!c.missing);
+    if(pending.length){toast(`Preparing ${pending.length} cue${pending.length===1?"":"s"} for Show Mode…`);await mapLimit(pending,2,ensureCueLoaded);}
+    const missing=state.cues.filter(c=>c.missing).length;
+    if(missing)toast(`${missing} cue${missing===1?" is":"s are"} missing audio.`);
+    else toast("Show preflight ready.");
+    return missing===0;
   }
 
   function getCue(id){ return state.cues.find(c => c.id === id); }
@@ -720,6 +857,13 @@
     renderCueList();
     renderInspector();
     renderTransport();
+  }
+
+
+  function cueStatusMarkup(cue){
+    const status=cue.missing?"missing":(cue.loadState|| (cue.buffer?"ready":"loading"));
+    const label=status==="ready"?"READY":status==="loading"?"LOADING":"MISSING";
+    return `<span class="cue-status ${status}">${label}</span>`;
   }
 
   function renderCueStates(){
@@ -744,13 +888,12 @@
     const meta=row.querySelector(".cue-meta");
     if(title)title.textContent=cue.name;
     if(meta)meta.innerHTML=`
-      <span>${fmt(cue.trimEnd-cue.trimStart)}</span>
+      ${cueStatusMarkup(cue)}
+      <span>${fmt(Math.max(0,(cue.trimEnd||0)-(cue.trimStart||0)))}</span>
       <span>${cue.gainDb.toFixed(1)} dB</span>
       ${cue.hotkey?`<span class="chip hot">${escapeHtml(cue.hotkey)}</span>`:""}
       ${cue.loop?`<span class="chip loop">LOOP</span>`:""}
       ${cue.fadeIn||cue.fadeOut?`<span class="chip">↗ ${cue.fadeIn.toFixed(1)} / ↘ ${cue.fadeOut.toFixed(1)}</span>`:""}`;
-    renderCueStates();
-    if(state.padView)schedulePadLayout();
   }
 
   function renderCueList(){
@@ -776,7 +919,8 @@
         <div class="cue-main">
           <div class="cue-title">${escapeHtml(cue.name)}</div>
           <div class="cue-meta">
-            <span>${fmt(cue.trimEnd-cue.trimStart)}</span>
+            ${cueStatusMarkup(cue)}
+            <span>${fmt(Math.max(0,(cue.trimEnd||0)-(cue.trimStart||0)))}</span>
             <span>${cue.gainDb.toFixed(1)} dB</span>
             ${cue.hotkey?`<span class="chip hot">${escapeHtml(cue.hotkey)}</span>`:""}
             ${cue.loop?`<span class="chip loop">LOOP</span>`:""}
@@ -817,43 +961,6 @@
     list.style.gridAutoRows="";
     ["--pad-padding","--pad-title-size","--pad-meta-size","--pad-meta-gap",
      "--pad-num-height","--pad-num-width","--pad-num-size","--pad-button-size"].forEach(name=>list.style.removeProperty(name));
-    list.querySelectorAll(".cue-title").forEach(title=>{
-      title.style.fontSize="";
-      title.style.maxHeight="";
-      title.style.display="";
-      title.style.webkitLineClamp="";
-      title.style.webkitBoxOrient="";
-    });
-  }
-
-  function fitPadTitles(){
-    if(!state.padView)return;
-    els.cueList.querySelectorAll(".cue-title").forEach(title=>{
-      const row=title.closest(".cue");
-      if(!row || title.clientWidth<20)return;
-
-      title.style.display="block";
-      title.style.webkitLineClamp="unset";
-      title.style.webkitBoxOrient="initial";
-      title.style.maxHeight="none";
-
-      const base=parseFloat(getComputedStyle(title).fontSize)||15;
-      const minSize=state.showMode?10:10.5;
-      const maxLines=row.getBoundingClientRect().height<105?2:3;
-      let size=base;
-      title.style.fontSize=`${size}px`;
-
-      while(size>minSize && title.scrollHeight>(size*1.08*maxLines)+1){
-        size-=0.5;
-        title.style.fontSize=`${size}px`;
-      }
-
-      title.style.display="-webkit-box";
-      title.style.webkitBoxOrient="vertical";
-      title.style.webkitLineClamp=String(maxLines);
-      title.style.maxHeight=`${(size*1.08*maxLines).toFixed(1)}px`;
-      title.title=title.textContent;
-    });
   }
 
   function updatePadLayout(){
@@ -905,7 +1012,41 @@
       list.style.gridTemplateColumns=`repeat(${cols},minmax(0,1fr))`;
       list.style.gridAutoRows=`minmax(${minTileHeight}px,auto)`;
     }
-    requestAnimationFrame(fitPadTitles);
+  }
+
+  function syncInspectorValues(cue){
+    if(!cue)return;
+    els.selectedName.textContent = cue.name;
+    const status=cue.missing?"MISSING":cue.loadState==="loading"?"LOADING":"READY";
+    els.selectedFile.textContent = `${cue.fileName} · ${status}`;
+    els.cueName.value = cue.name;
+    els.cueColor.value = cue.color;
+    els.hotkeyValue.textContent = cue.hotkey || "None";
+    els.gain.value = cue.gainDb;
+    els.gainValue.textContent = `${cue.gainDb.toFixed(1)} dB`;
+    els.fadeIn.max = Math.max(30,cue.duration||30);
+    els.fadeOut.max = Math.max(30,cue.duration||30);
+    els.fadeIn.value = cue.fadeIn;
+    els.fadeOut.value = cue.fadeOut;
+    els.fadeInValue.textContent = `${cue.fadeIn.toFixed(1)} s`;
+    els.fadeOutValue.textContent = `${cue.fadeOut.toFixed(1)} s`;
+    els.fadeCurve.value = cue.fadeCurve;
+    els.manualFade.value = cue.manualFade;
+    els.manualFadeValue.textContent = `${cue.manualFade.toFixed(1)} s`;
+    els.trimStart.max = Math.max(.01,cue.duration||.01);
+    els.trimEnd.max = Math.max(.01,cue.duration||.01);
+    els.trimStart.value = cue.trimStart||0;
+    els.trimEnd.value = cue.trimEnd||0;
+    els.trimStartValue.textContent = fmtMs(cue.trimStart||0);
+    els.trimEndValue.textContent = fmtMs(cue.trimEnd||0);
+    els.waveIn.textContent = `IN ${fmtMs(cue.trimStart||0)}`;
+    els.waveOut.textContent = `OUT ${fmtMs(cue.trimEnd||0)}`;
+    const playhead=getEditorPlayhead(cue);
+    els.wavePlayhead.textContent=`PLAYHEAD ${fmtMs(playhead)}`;
+    els.loop.checked = cue.loop;
+    els.autoFollow.checked = cue.autoFollow;
+    els.transitionMode.value = cue.transitionMode;
+    els.transitionTime.value = cue.transitionTime;
   }
 
   function renderInspector(){
@@ -919,35 +1060,8 @@
     }
     els.noSelection.classList.add("hidden");
     els.cueEditor.classList.remove("hidden");
-    els.selectedName.textContent = cue.name;
-    els.selectedFile.textContent = cue.fileName;
-    els.cueName.value = cue.name;
-    els.cueColor.value = cue.color;
-    els.hotkeyValue.textContent = cue.hotkey || "None";
-    els.gain.value = cue.gainDb;
-    els.gainValue.textContent = `${cue.gainDb.toFixed(1)} dB`;
-    els.fadeIn.max = Math.max(30,cue.duration);
-    els.fadeOut.max = Math.max(30,cue.duration);
-    els.fadeIn.value = cue.fadeIn;
-    els.fadeOut.value = cue.fadeOut;
-    els.fadeInValue.textContent = `${cue.fadeIn.toFixed(1)} s`;
-    els.fadeOutValue.textContent = `${cue.fadeOut.toFixed(1)} s`;
-    els.fadeCurve.value = cue.fadeCurve;
-    els.manualFade.value = cue.manualFade;
-    els.manualFadeValue.textContent = `${cue.manualFade.toFixed(1)} s`;
-    els.trimStart.max = cue.duration;
-    els.trimEnd.max = cue.duration;
-    els.trimStart.value = cue.trimStart;
-    els.trimEnd.value = cue.trimEnd;
-    els.trimStartValue.textContent = fmt(cue.trimStart);
-    els.trimEndValue.textContent = fmt(cue.trimEnd);
-    els.waveIn.textContent = `IN ${fmt(cue.trimStart)}`;
-    els.waveOut.textContent = `OUT ${fmt(cue.trimEnd)}`;
-    els.loop.checked = cue.loop;
-    els.autoFollow.checked = cue.autoFollow;
-    els.transitionMode.value = cue.transitionMode;
-    els.transitionTime.value = cue.transitionTime;
-    if(!state.showMode) drawWaveform(cue);
+    syncInspectorValues(cue);
+    if(!state.showMode) requestWaveDraw(cue);
   }
 
   function renderTransport(){
@@ -961,13 +1075,15 @@
     return String(s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));
   }
 
-  function updateCue(patch){
+  function updateCue(patch,{commit=false}={}){
     const cue = getCue(state.selectedId);
     if (!cue) return;
     Object.assign(cue,patch);
-    saveProject();
+    saveProject(commit);
     updateCueRow(cue);
-    renderInspector();
+    syncInspectorValues(cue);
+    const waveKeys=["trimStart","trimEnd","fadeIn","fadeOut","fadeCurve"];
+    if(Object.keys(patch).some(key=>waveKeys.includes(key)))requestWaveDraw(cue);
   }
 
   function makeCurve(type, from, to, length=64){
@@ -1012,7 +1128,9 @@
 
   async function startCueNow(id, offsetOverride=null, isResume=false){
     const cue = getCue(id);
-    if (!cue || cue.missing || !cue.buffer){ toast("Cue audio is unavailable."); return; }
+    if (!cue){ toast("Cue audio is unavailable."); return; }
+    if(!cue.buffer && !cue.missing){toast("Loading cue audio…");await ensureCueLoaded(cue);}
+    if (cue.missing || !cue.buffer){ toast("Cue audio is unavailable."); return; }
     await initAudio();
 
     if (state.active.has(id)) stopCue(id,0,true);
@@ -1194,144 +1312,199 @@
     return x;
   }
 
+  function getEditorPlayhead(cue){
+    if(!cue)return 0;
+    if(!state.editorPlayheads.has(cue.id))state.editorPlayheads.set(cue.id,cue.trimStart||0);
+    return clamp(state.editorPlayheads.get(cue.id)||0,0,Math.max(0,cue.duration||0));
+  }
+
+  function setEditorPlayhead(cue,time){
+    if(!cue)return;
+    state.editorPlayheads.set(cue.id,clamp(time,0,Math.max(0,cue.duration||0)));
+    if(cue.id===state.selectedId)els.wavePlayhead.textContent=`PLAYHEAD ${fmtMs(getEditorPlayhead(cue))}`;
+    requestWaveDraw(cue);
+  }
+
+  function getWaveView(cue){
+    const duration=Math.max(.001,cue?.duration||.001);
+    let view=state.waveViews.get(cue.id);
+    if(!view)view={start:0,end:duration};
+    const minSpan=Math.min(duration,.25);
+    let span=clamp(view.end-view.start,minSpan,duration);
+    let start=clamp(view.start,0,Math.max(0,duration-span));
+    const normalized={start,end:start+span};
+    state.waveViews.set(cue.id,normalized);
+    return normalized;
+  }
+
+  function setWaveView(cue,start,end){
+    if(!cue?.duration)return;
+    const duration=cue.duration;
+    const minSpan=Math.min(duration,.25);
+    let span=clamp(end-start,minSpan,duration);
+    start=clamp(start,0,Math.max(0,duration-span));
+    state.waveViews.set(cue.id,{start,end:start+span});
+    requestWaveDraw(cue);
+  }
+
+  function zoomWave(cue,factor,anchorTime=getEditorPlayhead(cue)){
+    if(!cue?.duration)return;
+    const view=getWaveView(cue), oldSpan=view.end-view.start;
+    const newSpan=clamp(oldSpan*factor,Math.min(.25,cue.duration),cue.duration);
+    const ratio=oldSpan?clamp((anchorTime-view.start)/oldSpan,0,1):.5;
+    const start=anchorTime-newSpan*ratio;
+    setWaveView(cue,start,start+newSpan);
+  }
+
   function waveformGeometry(cue,rect){
-    const timeToX=time=>clamp((time/cue.duration)*rect.width,0,rect.width);
+    const view=getWaveView(cue);
+    const span=Math.max(.001,view.end-view.start);
+    const timeToX=time=>((time-view.start)/span)*rect.width;
+    const xToTime=x=>view.start+clamp(x/Math.max(1,rect.width),0,1)*span;
     return {
+      view,
       inX:timeToX(cue.trimStart),
       outX:timeToX(cue.trimEnd),
       fadeInX:timeToX(cue.trimStart+cue.fadeIn),
       fadeOutX:timeToX(cue.trimEnd-cue.fadeOut),
-      timeToX
+      timeToX,xToTime
     };
   }
 
-  function drawWaveform(cue){
-    const canvas=els.waveform;
+  function prepareCanvas(canvas){
     const rect=canvas.getBoundingClientRect();
     const dpr=window.devicePixelRatio||1;
     const pixelWidth=Math.max(1,Math.floor(rect.width*dpr));
     const pixelHeight=Math.max(1,Math.floor(rect.height*dpr));
-    if(canvas.width!==pixelWidth || canvas.height!==pixelHeight){
-      canvas.width=pixelWidth;
-      canvas.height=pixelHeight;
-    }
+    if(canvas.width!==pixelWidth || canvas.height!==pixelHeight){canvas.width=pixelWidth;canvas.height=pixelHeight;}
     const ctx=canvas.getContext("2d");
     ctx.setTransform(dpr,0,0,dpr,0,0);
     ctx.clearRect(0,0,rect.width,rect.height);
-    ctx.fillStyle="#101217";ctx.fillRect(0,0,rect.width,rect.height);
-    if(!cue.buffer || !cue.duration) return;
-    const data=cue.buffer.getChannelData(0);
-    const width=Math.floor(rect.width);
-    const step=Math.max(1,Math.floor(data.length/width));
-    const mid=rect.height/2;
-    ctx.strokeStyle="#6dd6ff";
-    ctx.lineWidth=1;
-    ctx.beginPath();
+    return {ctx,rect};
+  }
+
+  function drawPeakRange(ctx,rect,cue,viewStart,viewEnd,stroke="#6dd6ff",alpha=1){
+    const peaks=state.wavePeaks.get(cue.id);
+    if(!peaks)return;
+    const duration=Math.max(.001,cue.duration), width=Math.max(1,Math.floor(rect.width)), mid=rect.height/2;
+    ctx.save();ctx.globalAlpha=alpha;ctx.strokeStyle=stroke;ctx.lineWidth=1;ctx.beginPath();
     for(let x=0;x<width;x++){
-      let min=1,max=-1;
-      const start=x*step;
-      for(let j=0;j<step && start+j<data.length;j++){
-        const v=data[start+j]; if(v<min)min=v;if(v>max)max=v;
-      }
-      ctx.moveTo(x,mid+min*mid*.85);
-      ctx.lineTo(x,mid+max*mid*.85);
+      const t=viewStart+(x/(Math.max(1,width-1)))*(viewEnd-viewStart);
+      const idx=clamp(Math.floor((t/duration)*peaks.count),0,peaks.count-1);
+      const min=peaks.mins[idx],max=peaks.maxs[idx];
+      ctx.moveTo(x,mid+min*mid*.84);ctx.lineTo(x,mid+max*mid*.84);
     }
-    ctx.stroke();
+    ctx.stroke();ctx.restore();
+  }
 
+  function drawWaveOverview(cue){
+    const {ctx,rect}=prepareCanvas(els.waveOverview);
+    ctx.fillStyle="#0e1015";ctx.fillRect(0,0,rect.width,rect.height);
+    if(!cue?.buffer || !cue.duration){
+      ctx.fillStyle="#8792a2";ctx.font="800 10px Inter,system-ui,sans-serif";ctx.textAlign="center";
+      ctx.fillText(cue?.missing?"AUDIO MISSING":"LOADING AUDIO…",rect.width/2,rect.height/2+3);return;
+    }
+    cachePeaks(cue);drawPeakRange(ctx,rect,cue,0,cue.duration,"#53697b",.9);
+    const tx=t=>clamp((t/cue.duration)*rect.width,0,rect.width);
+    const inX=tx(cue.trimStart),outX=tx(cue.trimEnd);
+    ctx.fillStyle="rgba(244,185,66,.12)";ctx.fillRect(inX,0,Math.max(0,outX-inX),rect.height);
+    const view=getWaveView(cue), vx=tx(view.start), vw=Math.max(2,tx(view.end)-vx);
+    ctx.strokeStyle="#f4b942";ctx.lineWidth=1.5;ctx.strokeRect(vx+.75,.75,Math.max(1,vw-1.5),rect.height-1.5);
+  }
+
+  function drawWaveform(cue){
+    if(!cue || cue.id!==state.selectedId)return;
+    const {ctx,rect}=prepareCanvas(els.waveform);
+    ctx.fillStyle="#101217";ctx.fillRect(0,0,rect.width,rect.height);
+    if(!cue.buffer || !cue.duration){
+      ctx.fillStyle="#8792a2";ctx.font="800 11px Inter,system-ui,sans-serif";ctx.textAlign="center";
+      ctx.fillText(cue.missing?"Audio unavailable — relink this cue":"Loading waveform…",rect.width/2,rect.height/2+4);
+      drawWaveOverview(cue);return;
+    }
+    cachePeaks(cue);
     const g=waveformGeometry(cue,rect);
-    ctx.fillStyle="rgba(244,185,66,.10)";
-    ctx.fillRect(g.inX,0,Math.max(0,g.outX-g.inX),rect.height);
-    ctx.fillStyle="rgba(0,0,0,.58)";
-    ctx.fillRect(0,0,g.inX,rect.height);
-    ctx.fillRect(g.outX,0,rect.width-g.outX,rect.height);
+    drawPeakRange(ctx,rect,cue,g.view.start,g.view.end);
 
-    const top=18;
-    const bottom=rect.height-18;
-    const fullY=top;
-    const zeroY=bottom;
+    const selStart=Math.max(g.view.start,cue.trimStart), selEnd=Math.min(g.view.end,cue.trimEnd);
+    if(selEnd>selStart){ctx.fillStyle="rgba(244,185,66,.09)";ctx.fillRect(clamp(g.timeToX(selStart),0,rect.width),0,Math.max(0,g.timeToX(selEnd)-g.timeToX(selStart)),rect.height);}
+    if(cue.trimStart>g.view.start){ctx.fillStyle="rgba(0,0,0,.58)";ctx.fillRect(0,0,clamp(g.inX,0,rect.width),rect.height);}
+    if(cue.trimEnd<g.view.end){ctx.fillStyle="rgba(0,0,0,.58)";const x=clamp(g.outX,0,rect.width);ctx.fillRect(x,0,rect.width-x,rect.height);}
+
+    const top=18,bottom=rect.height-18,fullY=top,zeroY=bottom;
     const envelopeY=(time)=>{
-      if(time<=cue.trimStart || time>=cue.trimEnd) return zeroY;
+      if(time<=cue.trimStart || time>=cue.trimEnd)return zeroY;
       let level=1;
-      if(cue.fadeIn>0 && time<cue.trimStart+cue.fadeIn){
-        level=curveProgress(cue.fadeCurve,(time-cue.trimStart)/cue.fadeIn);
-      }
-      if(cue.fadeOut>0 && time>cue.trimEnd-cue.fadeOut){
-        level=Math.min(level,curveProgress(cue.fadeCurve,(cue.trimEnd-time)/cue.fadeOut));
-      }
+      if(cue.fadeIn>0 && time<cue.trimStart+cue.fadeIn)level=curveProgress(cue.fadeCurve,(time-cue.trimStart)/cue.fadeIn);
+      if(cue.fadeOut>0 && time>cue.trimEnd-cue.fadeOut)level=Math.min(level,curveProgress(cue.fadeCurve,(cue.trimEnd-time)/cue.fadeOut));
       return zeroY-(zeroY-fullY)*level;
     };
-
-    ctx.strokeStyle="#6dd6ff";
-    ctx.lineWidth=2;
-    ctx.beginPath();
-    const samples=Math.max(32,Math.floor((g.outX-g.inX)/4));
-    for(let i=0;i<=samples;i++){
-      const time=cue.trimStart+(cue.trimEnd-cue.trimStart)*(i/samples);
-      const x=g.timeToX(time), y=envelopeY(time);
-      if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+    if(selEnd>selStart){
+      ctx.strokeStyle="#6dd6ff";ctx.lineWidth=2;ctx.beginPath();
+      const samples=Math.max(24,Math.floor((g.timeToX(selEnd)-g.timeToX(selStart))/5));
+      for(let i=0;i<=samples;i++){const time=selStart+(selEnd-selStart)*(i/samples),x=g.timeToX(time),y=envelopeY(time);if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);}ctx.stroke();
     }
-    ctx.stroke();
 
-    ctx.strokeStyle="#f4b942";ctx.lineWidth=2;
-    ctx.beginPath();ctx.moveTo(g.inX,0);ctx.lineTo(g.inX,rect.height);ctx.moveTo(g.outX,0);ctx.lineTo(g.outX,rect.height);ctx.stroke();
+    ctx.strokeStyle="#f4b942";ctx.lineWidth=2;ctx.beginPath();
+    if(g.inX>=0&&g.inX<=rect.width){ctx.moveTo(g.inX,0);ctx.lineTo(g.inX,rect.height);}
+    if(g.outX>=0&&g.outX<=rect.width){ctx.moveTo(g.outX,0);ctx.lineTo(g.outX,rect.height);}ctx.stroke();
 
-    function triangle(x,y,direction,color){
-      ctx.fillStyle=color;ctx.beginPath();
-      if(direction==="down"){ctx.moveTo(x-7,y);ctx.lineTo(x+7,y);ctx.lineTo(x,y+10);}
-      else{ctx.moveTo(x-7,y);ctx.lineTo(x+7,y);ctx.lineTo(x,y-10);}
-      ctx.closePath();ctx.fill();
-    }
-    triangle(g.inX,1,"down","#f4b942");
-    triangle(g.outX,1,"down","#f4b942");
-    triangle(g.fadeInX,rect.height-1,"up","#6dd6ff");
-    triangle(g.fadeOutX,rect.height-1,"up","#6dd6ff");
+    function triangle(x,y,direction,color){if(x<0||x>rect.width)return;ctx.fillStyle=color;ctx.beginPath();if(direction==="down"){ctx.moveTo(x-7,y);ctx.lineTo(x+7,y);ctx.lineTo(x,y+10);}else{ctx.moveTo(x-7,y);ctx.lineTo(x+7,y);ctx.lineTo(x,y-10);}ctx.closePath();ctx.fill();}
+    triangle(g.inX,1,"down","#f4b942");triangle(g.outX,1,"down","#f4b942");triangle(g.fadeInX,rect.height-1,"up","#6dd6ff");triangle(g.fadeOutX,rect.height-1,"up","#6dd6ff");
 
-    ctx.font="800 9px Inter,system-ui,sans-serif";
-    ctx.textAlign="center";
+    const playhead=getEditorPlayhead(cue), px=g.timeToX(playhead);
+    if(px>=0&&px<=rect.width){ctx.strokeStyle="#ffffff";ctx.globalAlpha=.78;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(px,0);ctx.lineTo(px,rect.height);ctx.stroke();ctx.globalAlpha=1;}
+
+    ctx.font="800 9px Inter,system-ui,sans-serif";ctx.textAlign="center";
     ctx.fillStyle="#111318";
-    ctx.fillText("IN",clamp(g.inX,10,rect.width-10),10);
-    ctx.fillText("OUT",clamp(g.outX,13,rect.width-13),10);
+    if(g.inX>=0&&g.inX<=rect.width)ctx.fillText("IN",clamp(g.inX,10,rect.width-10),10);
+    if(g.outX>=0&&g.outX<=rect.width)ctx.fillText("OUT",clamp(g.outX,13,rect.width-13),10);
     ctx.fillStyle="#d8f5ff";
-    if(cue.fadeIn>0)ctx.fillText("FI",clamp(g.fadeInX,10,rect.width-10),rect.height-5);
-    if(cue.fadeOut>0)ctx.fillText("FO",clamp(g.fadeOutX,10,rect.width-10),rect.height-5);
+    if(cue.fadeIn>0&&g.fadeInX>=0&&g.fadeInX<=rect.width)ctx.fillText("FI",clamp(g.fadeInX,10,rect.width-10),rect.height-5);
+    if(cue.fadeOut>0&&g.fadeOutX>=0&&g.fadeOutX<=rect.width)ctx.fillText("FO",clamp(g.fadeOutX,10,rect.width-10),rect.height-5);
+    drawWaveOverview(cue);
+  }
+
+  function requestWaveDraw(cue=getCue(state.selectedId)){
+    if(state.showMode||!cue)return;
+    if(state.waveFrame)return;
+    state.waveFrame=requestAnimationFrame(()=>{state.waveFrame=null;const current=getCue(state.selectedId);if(current)drawWaveform(current);});
   }
 
   function waveformHandleAt(e,cue){
+    if(!cue?.duration)return null;
     const rect=els.waveform.getBoundingClientRect();
-    const x=clamp(e.clientX-rect.left,0,rect.width);
-    const y=clamp(e.clientY-rect.top,0,rect.height);
-    const g=waveformGeometry(cue,rect);
-    const candidates=y<rect.height/2
-      ? [{name:"trimStart",x:g.inX},{name:"trimEnd",x:g.outX}]
-      : [{name:"fadeIn",x:g.fadeInX},{name:"fadeOut",x:g.fadeOutX}];
+    const x=clamp(e.clientX-rect.left,0,rect.width),y=clamp(e.clientY-rect.top,0,rect.height),g=waveformGeometry(cue,rect);
+    const candidates=(y<rect.height/2?[{name:"trimStart",x:g.inX},{name:"trimEnd",x:g.outX}]:[{name:"fadeIn",x:g.fadeInX},{name:"fadeOut",x:g.fadeOutX}])
+      .filter(c=>c.x>=-18&&c.x<=rect.width+18);
+    if(!candidates.length)return null;
     candidates.sort((a,b)=>Math.abs(a.x-x)-Math.abs(b.x-x));
     return Math.abs(candidates[0].x-x)<=18?candidates[0].name:null;
   }
 
-  function updateWaveHandle(e){
-    const drag=state.waveDrag;
-    const cue=drag?getCue(drag.cueId):null;
-    if(!cue || !cue.duration)return;
-    const rect=els.waveform.getBoundingClientRect();
-    const time=clamp(((e.clientX-rect.left)/rect.width)*cue.duration,0,cue.duration);
-    const minGap=Math.min(.05,cue.duration/1000);
+  function syncWaveEditorValues(cue){
+    els.fadeIn.value=cue.fadeIn;els.fadeOut.value=cue.fadeOut;
+    els.fadeInValue.textContent=`${cue.fadeIn.toFixed(1)} s`;els.fadeOutValue.textContent=`${cue.fadeOut.toFixed(1)} s`;
+    els.trimStart.value=cue.trimStart;els.trimEnd.value=cue.trimEnd;
+    els.trimStartValue.textContent=fmtMs(cue.trimStart);els.trimEndValue.textContent=fmtMs(cue.trimEnd);
+    els.waveIn.textContent=`IN ${fmtMs(cue.trimStart)}`;els.waveOut.textContent=`OUT ${fmtMs(cue.trimEnd)}`;
+  }
+
+  function updateWaveHandleAtX(clientX){
+    const drag=state.waveDrag,cue=drag?getCue(drag.cueId):null;if(!cue?.duration)return;
+    const rect=els.waveform.getBoundingClientRect(),g=waveformGeometry(cue,rect),time=clamp(g.xToTime(clientX-rect.left),0,cue.duration),minGap=Math.min(.01,cue.duration/1000);
     if(drag.handle==="trimStart"){
-      cue.trimStart=Math.min(time,cue.trimEnd-minGap);
-      const length=cue.trimEnd-cue.trimStart;
-      cue.fadeIn=Math.min(cue.fadeIn,length);
-      cue.fadeOut=Math.min(cue.fadeOut,length);
+      cue.trimStart=Math.min(time,cue.trimEnd-minGap);const length=cue.trimEnd-cue.trimStart;cue.fadeIn=Math.min(cue.fadeIn,length);cue.fadeOut=Math.min(cue.fadeOut,length);
     }else if(drag.handle==="trimEnd"){
-      cue.trimEnd=Math.max(time,cue.trimStart+minGap);
-      const length=cue.trimEnd-cue.trimStart;
-      cue.fadeIn=Math.min(cue.fadeIn,length);
-      cue.fadeOut=Math.min(cue.fadeOut,length);
-    }else if(drag.handle==="fadeIn"){
-      cue.fadeIn=clamp(time-cue.trimStart,0,cue.trimEnd-cue.trimStart);
-    }else if(drag.handle==="fadeOut"){
-      cue.fadeOut=clamp(cue.trimEnd-time,0,cue.trimEnd-cue.trimStart);
-    }
-    renderInspector();
-    updateCueRow(cue);
+      cue.trimEnd=Math.max(time,cue.trimStart+minGap);const length=cue.trimEnd-cue.trimStart;cue.fadeIn=Math.min(cue.fadeIn,length);cue.fadeOut=Math.min(cue.fadeOut,length);
+    }else if(drag.handle==="fadeIn")cue.fadeIn=clamp(time-cue.trimStart,0,cue.trimEnd-cue.trimStart);
+    else if(drag.handle==="fadeOut")cue.fadeOut=clamp(cue.trimEnd-time,0,cue.trimEnd-cue.trimStart);
+    syncWaveEditorValues(cue);requestWaveDraw(cue);
+  }
+
+  function queueWavePointer(e){
+    state.pendingWavePointer=e.clientX;
+    if(state.waveDrag?.raf)return;
+    state.waveDrag.raf=requestAnimationFrame(()=>{if(state.waveDrag)state.waveDrag.raf=null;const x=state.pendingWavePointer;state.pendingWavePointer=null;if(x!=null)updateWaveHandleAtX(x);});
   }
 
   function reorderCue(fromId,toId){
@@ -1356,6 +1529,7 @@
     const cue=state.cues[idx];
     stopCue(cue.id,0);
     state.cues.splice(idx,1);
+    state.wavePeaks.delete(cue.id);state.waveViews.delete(cue.id);state.editorPlayheads.delete(cue.id);state.loadPromises.delete(cue.id);
     deleteBlob(cue.id);
     const next=state.cues[Math.min(idx,state.cues.length-1)];
     state.selectedId=next?.id||null;
@@ -1369,6 +1543,7 @@
     stopAll(0);
     for(const cue of state.cues) await deleteBlob(cue.id);
     state.cues=[];state.selectedId=null;state.armedId=null;state.currentId=null;
+    state.wavePeaks.clear();state.waveViews.clear();state.editorPlayheads.clear();state.loadPromises.clear();
     saveProject();render();
   }
 
@@ -1385,7 +1560,7 @@
   function exportShow(){
     const clean=state.cues.map(({buffer,blob,...cue})=>cue);
     const payload={
-      app:"CueDeck",version:1,exported:new Date().toISOString(),
+      app:"CueDeck",version:1,appVersion:"1.9",exported:new Date().toISOString(),
       globalTransitionMode:state.globalTransitionMode,
       globalTransitionTime:state.globalTransitionTime,
       cues:clean
@@ -1404,7 +1579,8 @@
       const data=JSON.parse(await file.text());
       if(!Array.isArray(data.cues)) throw new Error("Invalid show");
       stopAll(0);
-      state.cues=data.cues.map(c=>({...c,buffer:null,blob:null,missing:true}));
+      state.wavePeaks.clear();state.waveViews.clear();state.editorPlayheads.clear();state.loadPromises.clear();
+      state.cues=data.cues.map(c=>({...c,buffer:null,blob:null,missing:true,loadState:"missing"}));
       state.globalTransitionMode=["cue","none","stop","crossfade"].includes(data.globalTransitionMode)
         ? data.globalTransitionMode : state.globalTransitionMode;
       state.globalTransitionTime=clamp(Number(data.globalTransitionTime ?? state.globalTransitionTime)||0,0,30);
@@ -1418,20 +1594,21 @@
   }
 
   async function relinkFiles(files){
-    const list=[...files];
+    const matches=[...files].map(file=>({file,cue:state.cues.find(c=>c.missing && c.fileName===file.name)})).filter(x=>x.cue);
+    if(!matches.length){if(state.cues.some(c=>c.missing))toast("No filenames matched missing cues.");else addFiles(files);return;}
     let linked=0;
-    for(const file of list){
-      const cue=state.cues.find(c=>c.missing && c.fileName===file.name);
-      if(!cue)continue;
+    matches.forEach(({cue,file})=>{cue.blob=file;cue.missing=false;cue.loadState="loading";updateCueRow(cue);});
+    await mapLimit(matches,2,async ({cue,file})=>{
       try{
-        cue.buffer=await decodeFile(file);cue.blob=file;cue.duration=cue.buffer.duration;cue.missing=false;
-        cue.trimEnd=Math.min(cue.trimEnd||cue.duration,cue.duration);
-        await saveBlob(cue.id,file);linked++;
-      }catch{}
-    }
-    if(linked){saveProject();render();toast(`${linked} cue${linked===1?"":"s"} relinked.`);}
-    else if(state.cues.some(c=>c.missing)) toast("No filenames matched missing cues.");
-    else addFiles(files);
+        const buffer=await decodeFile(file);cue.buffer=buffer;cue.duration=buffer.duration;cue.missing=false;cue.loadState="ready";
+        cue.trimStart=clamp(Number(cue.trimStart)||0,0,Math.max(0,cue.duration-.01));
+        cue.trimEnd=clamp(Number(cue.trimEnd)||cue.duration,Math.min(cue.duration,cue.trimStart+.01),cue.duration);
+        cachePeaks(cue);await saveBlob(cue.id,file);linked++;
+      }catch{cue.buffer=null;cue.missing=true;cue.loadState="missing";}
+      updateCueRow(cue);if(cue.id===state.selectedId)renderInspector();
+    });
+    saveProject(true);
+    if(linked)toast(`${linked} cue${linked===1?"":"s"} relinked.`);
   }
 
   async function newShow(){
@@ -1439,6 +1616,7 @@
     stopAll(0);
     for(const cue of state.cues) await deleteBlob(cue.id);
     state.cues=[];state.selectedId=null;state.armedId=null;state.currentId=null;
+    state.wavePeaks.clear();state.waveViews.clear();state.editorPlayheads.clear();state.loadPromises.clear();
     saveProject();render();
   }
 
@@ -1534,7 +1712,9 @@
   els.stopAllBtn.addEventListener("click",()=>stopAll(0));
 
   $("showBtn").addEventListener("click",async()=>{
-    state.showMode=!state.showMode;
+    const entering=!state.showMode;
+    if(entering)await preflightShow();
+    state.showMode=entering;
     els.app.classList.toggle("show-mode",state.showMode);
     $("showBtn").textContent=state.showMode?"Exit Show Mode":"Show Mode";
     if(state.showMode && "wakeLock" in navigator){
@@ -1542,7 +1722,7 @@
     }else if(state.wakeLock){try{await state.wakeLock.release();}catch{} state.wakeLock=null;}
     renderCueStates();
     schedulePadLayout();
-    setTimeout(()=>{const cue=getCue(state.selectedId);if(cue && !state.showMode)drawWaveform(cue);schedulePadLayout();},100);
+    setTimeout(()=>{const cue=getCue(state.selectedId);if(cue && !state.showMode)requestWaveDraw(cue);schedulePadLayout();},100);
   });
   $("padBtn").addEventListener("click",()=>{
     state.padView=!state.padView;
@@ -1604,32 +1784,71 @@
     }else if(e.code==="KeyS"){
       e.preventDefault();if(state.currentId)stopCue(state.currentId,0);
     }else if(e.code==="KeyP"){e.preventDefault();togglePauseCurrent();}
+    else if(e.code==="KeyI"){e.preventDefault();const cue=getCue(state.selectedId);if(cue?.duration){const t=Math.min(getEditorPlayhead(cue),cue.trimEnd-.01);updateCue({trimStart:Math.max(0,t)},{commit:true});}}
+    else if(e.code==="KeyO"){e.preventDefault();const cue=getCue(state.selectedId);if(cue?.duration){const t=Math.max(getEditorPlayhead(cue),cue.trimStart+.01);updateCue({trimEnd:Math.min(cue.duration,t)},{commit:true});}}
   });
 
+  function waveTimeFromPointer(e,cue,canvas=els.waveform){
+    const rect=canvas.getBoundingClientRect();
+    if(canvas===els.waveOverview)return clamp(((e.clientX-rect.left)/Math.max(1,rect.width))*cue.duration,0,cue.duration);
+    return waveformGeometry(cue,rect).xToTime(e.clientX-rect.left);
+  }
+
   els.waveform.addEventListener("pointerdown",e=>{
-    const cue=getCue(state.selectedId);if(!cue)return;
-    const handle=waveformHandleAt(e,cue);if(!handle)return;
-    state.waveDrag={cueId:cue.id,handle};
-    els.waveform.setPointerCapture(e.pointerId);
+    const cue=getCue(state.selectedId);if(!cue?.duration)return;
+    const handle=waveformHandleAt(e,cue);
+    if(handle){
+      state.waveDrag={cueId:cue.id,handle,raf:null};
+      els.waveform.setPointerCapture(e.pointerId);
+    }else setEditorPlayhead(cue,waveTimeFromPointer(e,cue));
     e.preventDefault();
   });
   els.waveform.addEventListener("pointermove",e=>{
     const cue=getCue(state.selectedId);if(!cue)return;
-    if(state.waveDrag){updateWaveHandle(e);e.preventDefault();return;}
+    if(state.waveDrag){queueWavePointer(e);e.preventDefault();return;}
     const handle=waveformHandleAt(e,cue);
     els.waveform.style.cursor=handle?"ew-resize":"crosshair";
   });
   function endWaveDrag(e){
-    if(!state.waveDrag)return;
-    state.waveDrag=null;
-    saveProject();
+    const drag=state.waveDrag;if(!drag)return;
+    if(drag.raf){cancelAnimationFrame(drag.raf);drag.raf=null;}
+    if(state.pendingWavePointer!=null){const x=state.pendingWavePointer;state.pendingWavePointer=null;updateWaveHandleAtX(x);}
+    const cue=getCue(drag.cueId);state.waveDrag=null;
+    if(cue){updateCueRow(cue);saveProject(true);requestWaveDraw(cue);}
     try{els.waveform.releasePointerCapture(e.pointerId);}catch{}
   }
   els.waveform.addEventListener("pointerup",endWaveDrag);
   els.waveform.addEventListener("pointercancel",endWaveDrag);
+  els.waveform.addEventListener("wheel",e=>{
+    const cue=getCue(state.selectedId);if(!cue?.duration)return;
+    e.preventDefault();zoomWave(cue,e.deltaY>0?1.35:.74,waveTimeFromPointer(e,cue));
+  },{passive:false});
+
+  els.waveOverview.addEventListener("pointerdown",e=>{
+    const cue=getCue(state.selectedId);if(!cue?.duration)return;
+    const t=waveTimeFromPointer(e,cue,els.waveOverview),view=getWaveView(cue);
+    let span=view.end-view.start;if(span>=cue.duration*.98)span=Math.max(Math.min(cue.duration,10),cue.duration*.25);
+    setWaveView(cue,t-span/2,t+span/2);setEditorPlayhead(cue,t);e.preventDefault();
+  });
+
+  els.waveAuditionBtn.addEventListener("click",()=>{const cue=getCue(state.selectedId);if(cue)startCue(cue.id,getEditorPlayhead(cue));});
+  els.setInBtn.addEventListener("click",()=>{const cue=getCue(state.selectedId);if(!cue?.duration)return;const t=Math.min(getEditorPlayhead(cue),cue.trimEnd-.01);updateCue({trimStart:Math.max(0,t),fadeIn:Math.min(cue.fadeIn,cue.trimEnd-t),fadeOut:Math.min(cue.fadeOut,cue.trimEnd-t)},{commit:true});});
+  els.setOutBtn.addEventListener("click",()=>{const cue=getCue(state.selectedId);if(!cue?.duration)return;const t=Math.max(getEditorPlayhead(cue),cue.trimStart+.01);updateCue({trimEnd:Math.min(cue.duration,t),fadeIn:Math.min(cue.fadeIn,t-cue.trimStart),fadeOut:Math.min(cue.fadeOut,t-cue.trimStart)},{commit:true});});
+  els.zoomInBtn.addEventListener("click",()=>{const cue=getCue(state.selectedId);if(cue)zoomWave(cue,.5);});
+  els.zoomOutBtn.addEventListener("click",()=>{const cue=getCue(state.selectedId);if(cue)zoomWave(cue,2);});
+  els.zoomFitBtn.addEventListener("click",()=>{const cue=getCue(state.selectedId);if(cue?.duration)setWaveView(cue,0,cue.duration);});
+  function nudgeBoundary(which,delta){
+    const cue=getCue(state.selectedId);if(!cue?.duration)return;
+    if(which==="in"){const value=clamp(cue.trimStart+delta,0,cue.trimEnd-.01);updateCue({trimStart:value,fadeIn:Math.min(cue.fadeIn,cue.trimEnd-value),fadeOut:Math.min(cue.fadeOut,cue.trimEnd-value)},{commit:true});}
+    else{const value=clamp(cue.trimEnd+delta,cue.trimStart+.01,cue.duration);updateCue({trimEnd:value,fadeIn:Math.min(cue.fadeIn,value-cue.trimStart),fadeOut:Math.min(cue.fadeOut,value-cue.trimStart)},{commit:true});}
+  }
+  els.nudgeInBack.addEventListener("click",()=>nudgeBoundary("in",-.01));
+  els.nudgeInForward.addEventListener("click",()=>nudgeBoundary("in",.01));
+  els.nudgeOutBack.addEventListener("click",()=>nudgeBoundary("out",-.01));
+  els.nudgeOutForward.addEventListener("click",()=>nudgeBoundary("out",.01));
 
   window.addEventListener("resize",()=>{
-    const cue=getCue(state.selectedId);if(cue)drawWaveform(cue);
+    const cue=getCue(state.selectedId);if(cue)requestWaveDraw(cue);
     schedulePadLayout();
   });
   document.addEventListener("visibilitychange",()=>{if(document.hidden && state.active.size)toast("CueDeck is no longer the active tab.");});
@@ -1669,29 +1888,26 @@
       req.onsuccess=()=>resolve(req.result||null);req.onerror=()=>resolve(null);
     });
   }
-  async function saveProject(){
-    if(!state.db)return;
-    const clean=state.cues.map(({buffer,blob,...cue})=>cue);
-    localStorage.setItem("cuedeck-project",JSON.stringify(clean));
+  function persistProject(){
+    clearTimeout(state.saveTimer);state.saveTimer=null;
+    const clean=state.cues.map(({buffer,blob,loadState,...cue})=>cue);
+    try{localStorage.setItem("cuedeck-project",JSON.stringify(clean));}catch(err){console.error(err);}
+  }
+  function saveProject(immediate=false){
+    clearTimeout(state.saveTimer);
+    if(immediate){persistProject();return;}
+    state.saveTimer=setTimeout(persistProject,180);
   }
   async function restoreProject(){
     const raw=localStorage.getItem("cuedeck-project");
     if(!raw)return;
     try{
       const saved=JSON.parse(raw);
-      for(const meta of saved){
-        const blob=await getBlob(meta.id);
-        if(blob){
-          try{
-            const buffer=await decodeFile(blob);
-            state.cues.push({...meta,blob,buffer,duration:buffer.duration,missing:false});
-          }catch{
-            state.cues.push({...meta,blob:null,buffer:null,missing:true});
-          }
-        }else{
-          state.cues.push({...meta,blob:null,buffer:null,missing:true});
-        }
-      }
+      state.cues=saved.map(meta=>({
+        color:"#f4b942",hotkey:"",gainDb:0,fadeIn:0,fadeOut:0,fadeCurve:"linear",manualFade:2,
+        trimStart:0,trimEnd:Number(meta.duration)||0,loop:false,autoFollow:false,transitionMode:"none",transitionTime:2,
+        ...meta,blob:null,buffer:null,loadState:meta.missing?"missing":"loading"
+      }));
       state.selectedId=state.cues[0]?.id||null;
       state.armedId=state.selectedId;
     }catch(err){console.error(err);}
@@ -1708,7 +1924,9 @@
     try{await openDb();await restoreProject();}catch(err){console.error(err);}
     render();
     schedulePadLayout();
+    requestAnimationFrame(()=>hydrateCues());
   }
+  window.addEventListener("beforeunload",persistProject);
   boot();
 })();
 </script>
