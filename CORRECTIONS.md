@@ -37,3 +37,24 @@ Approved by Justin, 25 Nov 2026 ("go ahead").
 - Browsers have one audio output, so Audition is heard on the main output (as before).
 - A streamed loop (a loop longer than the memory budget allows) may have a tiny gap at the loop point. Loops normally decode, so they're gapless.
 - Not yet tested on Safari/iPad (see README).
+
+## Independent check (Fable agent, 25 Nov), findings and fixes
+The checker didn't build the app. It reproduced 3 Musts the suite had missed. All are fixed, with tests in `suite_independent_check` / `suite_upgrade_and_storage`, and confirmed with the checker's own probe scripts.
+
+| id | Finding | Fix | Status |
+|---|---|---|---|
+| IC1 | Two quick actions on a long cue jammed all playback (media torn down mid-start, `play()` never settled) | Starting cues are protected from tidy-up from the moment GO is pressed; `play()`/start have time limits; pre-warmed element kept (long-cue start now ≈ 7–18 ms) | Fixed |
+| IC2 | Escape/STOP ALL didn't stop a long cue still starting | Stop counter checked after every await; a cue's own stop cancels its start | Fixed |
+| IC3 | Saved cue list wiped when the database couldn't open, by an old tab, or by a rollback | Cue list restored from localStorage independently of the database; never saved before it's read; backup copy restores a list emptied by an older version; blocked upgrade shows a "close other tabs" screen and refuses new audio | Fixed |
+| IC4 | One failed decode left a cue MISSING for good | Saved "missing" is ignored; stored audio is retried every load | Fixed |
+| IC5 | Streamed loop could stop at the end of the file | Element loops natively; watchdog restarts it | Fixed |
+| IC6 | Show Mode allowed drag-reorder and file drops | Both blocked in Show Mode | Fixed |
+| IC7 | Old hotkeys on reserved keys were cleared silently | Cleared with a message naming them | Fixed |
+| IC8 | Audition ignored OUT and fades | Inside the cue: plays with fades and stops at OUT; outside: raw file | Fixed |
+| IC9 | Safari/iPad risks (play after awaits, new element per cue, iOS "interrupted", seek before metadata) | Pooled, reused media elements; resume from any non-running state with a time limit; seek verified, retried, refused rather than starting at 0:00 | Reduced; **needs an iPad check** |
+| IC10 | Hidden-tab timers delay streamed auto-follow | End of cue timed on the audio clock | Fixed |
+| IC11 | First Escape in full screen only exits full screen (Chrome) | Escape kept for Stop All while full screen (hold Esc to leave) where the browser supports it | Fixed (Chrome/Edge) |
+| IC12 | Firefox might double-fire Space after clicking a button | Not reproducible here (Chrome) | Open: Firefox untested |
+| IC13 | Import deleted other stored audio without asking | Confirmation first | Fixed |
+
+Suite: 64/64 (`python3 tests/run_tests.py`).

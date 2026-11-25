@@ -646,6 +646,12 @@
     loadPromises: new Map(),
     saveTimer: null,
     endOfList: false,
+    restored: false,
+    dbBlocked: false,
+    stopEpoch: 0,
+    starting: new Map(), // cue id → number of starts in progress
+    cancelled: new Set(),
+    mediaPool: [],
     media: new Map(),
     audition: null,
     auditionChain: null,
@@ -726,9 +732,11 @@
     return state.audioContext;
   }
 
+  const timeout=(ms,value)=>new Promise(r=>setTimeout(()=>r(value),ms));
   async function initAudio(){
     const ctx=ensureAudioContext();
-    if (ctx.state === "suspended") await ctx.resume();
+    // "suspended" (autoplay) or iOS "interrupted" (call, Siri): try to resume, never hang.
+    if (ctx.state !== "running") await Promise.race([ctx.resume().catch(()=>{}),timeout(1000)]);
   }
 
   function makeCue(file, buffer=null, id = uid()){
@@ -839,6 +847,7 @@
       /\.(wav|mp3|m4a|aac|ogg|flac|mp4|m4v|mov|webm)$/i.test(f.name)
     );
     if (!list.length){ toast("No supported audio or media files selected."); return; }
+    if (storageBusy()) return;
     const incoming=list.map(file=>makeCue(file));
     state.cues.push(...incoming);
     state.selectedId=incoming[incoming.length-1].id;
@@ -904,31 +913,38 @@
   }
 
   // ---------- streamed playback (long cues) ----------
+  // Media elements are pooled and reused (Safari limits how many can feed Web Audio,
+  // and an element that has played once is easier for iOS to play again).
   function getMedia(cue){
     let m=state.media.get(cue.id);
     if(m&&m.blob===cue.blob)return m;
     if(m)releaseMedia(cue.id);
     const ctx=ensureAudioContext();
-    const el=new Audio();el.preload="auto";
-    const url=URL.createObjectURL(cue.blob);el.src=url;
-    const node=ctx.createMediaElementSource(el);
-    m={el,node,url,blob:cue.blob};state.media.set(cue.id,m);return m;
+    let pair=state.mediaPool.pop();
+    if(!pair){const el=new Audio();el.preload="auto";pair={el,node:ctx.createMediaElementSource(el)};}
+    const url=URL.createObjectURL(cue.blob);
+    pair.el.loop=false;pair.el.onended=null;pair.el.src=url;
+    m={el:pair.el,node:pair.node,url,blob:cue.blob};state.media.set(cue.id,m);return m;
   }
   function releaseMedia(id){
     const m=state.media.get(id);if(!m)return;
-    try{m.el.pause();m.el.removeAttribute("src");m.el.load();}catch{}
+    state.media.delete(id);
+    try{m.el.pause();m.el.loop=false;m.el.onended=null;m.el.removeAttribute("src");m.el.load();}catch{}
     try{m.node.disconnect();}catch{}
-    URL.revokeObjectURL(m.url);state.media.delete(id);
+    URL.revokeObjectURL(m.url);
+    if(state.mediaPool.length<8)state.mediaPool.push({el:m.el,node:m.node});
   }
+  // Never release a cue that is playing, paused, on standby or part-way through starting.
   function releaseIdleMedia(){
-    for(const id of [...state.media.keys()])if(id!==state.armedId&&!state.active.has(id))releaseMedia(id);
+    for(const id of [...state.media.keys()])
+      if(id!==state.armedId&&!state.active.has(id)&&!state.starting.has(id))releaseMedia(id);
   }
   function releaseAllMedia(){for(const id of [...state.media.keys()])releaseMedia(id);}
   function seekMedia(el,t){
     return new Promise(resolve=>{
       let finished=false;
       const done=()=>{if(finished)return;finished=true;clearTimeout(timer);el.removeEventListener("seeked",done);resolve();};
-      const timer=setTimeout(done,600);
+      const timer=setTimeout(done,2000);
       const apply=()=>{
         if(Math.abs(el.currentTime-t)<.003&&!el.seeking){done();return;}
         el.addEventListener("seeked",done,{once:true});el.currentTime=t;
@@ -1045,10 +1061,11 @@
       row.querySelector(".play").addEventListener("click",(e)=>{e.stopPropagation();selectCue(cue.id,false);startCue(cue.id);});
       row.querySelector(".stop").addEventListener("click",(e)=>{e.stopPropagation();stopCue(cue.id,0);});
       row.draggable = true;
-      row.addEventListener("dragstart",e=>e.dataTransfer.setData("text/cue-id",cue.id));
+      row.addEventListener("dragstart",e=>{if(state.showMode){e.preventDefault();return;}e.dataTransfer.setData("text/cue-id",cue.id);});
       row.addEventListener("dragover",e=>e.preventDefault());
       row.addEventListener("drop",e=>{
         e.preventDefault();
+        if(state.showMode)return;
         const fromId = e.dataTransfer.getData("text/cue-id");
         reorderCue(fromId,cue.id);
       });
@@ -1278,10 +1295,25 @@
     param.setValueCurveAtTime(arr,when,span);
   }
 
-  function startCue(id, offsetOverride=null, isResume=false){
-    const task=()=>startCueNow(id,offsetOverride,isResume);
-    state.startQueue=state.startQueue.then(task,task);
-    return state.startQueue;
+  // Starts are queued in order. Loading happens before the queue so a slow cue can't
+  // hold up others, each start has a time limit so the queue can't jam, and a stop
+  // (Escape, STOP ALL, ■) cancels any start still in progress.
+  function markStarting(id,delta){
+    const n=(state.starting.get(id)||0)+delta;
+    if(n>0)state.starting.set(id,n);else state.starting.delete(id);
+  }
+  async function startCue(id, offsetOverride=null, isResume=false){
+    state.cancelled.delete(id);
+    const epoch=state.stopEpoch;
+    markStarting(id,1); // protects this cue's media from tidy-up until the start finishes
+    try{
+      const cue=getCue(id);
+      if(cue&&!cueReady(cue)&&!cue.missing){toast("Loading cue audio…");await ensureCueLoaded(cue);}
+      if(state.stopEpoch!==epoch||state.cancelled.has(id))return;
+      const task=()=>Promise.race([startCueNow(id,offsetOverride,isResume,epoch),timeout(5000)]);
+      state.startQueue=state.startQueue.then(task,task);
+      try{await state.startQueue;}catch(err){console.error(err);}
+    }finally{ markStarting(id,-1); }
   }
 
   // Applies "when this cue starts" to the other cues. Returns the crossfade time
@@ -1302,12 +1334,31 @@
     return 0;
   }
 
-  async function startCueNow(id, offsetOverride=null, isResume=false){
+  async function startCueNow(id, offsetOverride=null, isResume=false, epoch=state.stopEpoch){
+    markStarting(id,1);
+    try{ return await startCueInner(id,offsetOverride,isResume,epoch); }
+    finally{ markStarting(id,-1); }
+  }
+
+  // Calls fn when the audio clock reaches `at`. Audio-clock events keep time even
+  // when the browser throttles timers in a background tab.
+  function audioTimer(runtime,at,fn){
+    const ctx=state.audioContext;
+    const clock=ctx.createConstantSource(), mute=ctx.createGain();
+    mute.gain.value=0;clock.connect(mute).connect(ctx.destination);
+    clock.onended=fn;clock.start();clock.stop(Math.max(ctx.currentTime+.005,at));
+    runtime.clocks.push({clock,mute});
+    runtime.timers.push(setTimeout(fn,Math.max(0,(at-ctx.currentTime)*1000)+150)); // backup
+  }
+
+  async function startCueInner(id, offsetOverride, isResume, epoch){
+    const aborted=()=>state.stopEpoch!==epoch||state.cancelled.has(id);
     const cue = getCue(id);
     if (!cue){ toast("Cue audio is unavailable."); return; }
     if(!cueReady(cue) && !cue.missing){toast("Loading cue audio…");await ensureCueLoaded(cue);}
     if (!cueReady(cue)){ toast(`${cue.name}: audio is unavailable.`); return; }
     await initAudio();
+    if(aborted())return;
     const ctx = state.audioContext;
 
     if (state.active.has(id)) stopCue(id,0,true);
@@ -1320,7 +1371,7 @@
     const targetGain = dbToGain(cue.gainDb);
     const fi = isResume ? cue.fadeIn : Math.max(cue.fadeIn,crossfade);
     const runtime = {id,cue,kind:cue.buffer?"buffer":"media",gain,manualGain,gate,status:"playing",
-      startOffset,pausedOffset:null,intentionalStop:false,ended:false,timers:[]};
+      startOffset,pausedOffset:null,intentionalStop:false,ended:false,timers:[],clocks:[]};
 
     if(runtime.kind==="buffer"){
       const source = ctx.createBufferSource();
@@ -1341,25 +1392,35 @@
       runtime.halt=(at)=>{try{source.stop(at)}catch{}};
     }else{
       const media=getMedia(cue), el=media.el;
+      const bail=(msg)=>{ try{el.pause();}catch{} try{media.node.disconnect();}catch{} try{gate.disconnect();}catch{}
+        if(msg)toast(msg); if(id!==state.armedId&&!state.active.has(id))releaseMedia(id); };
       try{media.node.disconnect();}catch{}
       media.node.connect(gain);
       el.pause();
       await seekMedia(el,startOffset);
+      if(Math.abs(el.currentTime-startOffset)>.25)await seekMedia(el,startOffset);
+      if(aborted()||state.media.get(id)!==media){bail();return;}
+      if(Math.abs(el.currentTime-startOffset)>.25){bail(`${cue.name}: could not find the IN point. Try again.`);return;}
       const when = ctx.currentTime + .005;
       scheduleEnvelope(gain.gain,cue,startOffset,when,targetGain,fi);
-      try{ await el.play(); }
-      catch(err){ console.error(err); try{gate.disconnect();}catch{} toast(`${cue.name}: could not start playback.`); return; }
+      const played=await Promise.race([el.play().then(()=>true,err=>{console.error(err);return false;}),timeout(2000,false)]);
+      if(!played){bail(`${cue.name}: could not start playback.`);return;}
+      if(aborted()||state.media.get(id)!==media){bail();return;}
       runtime.el=el; runtime.media=media; runtime.startedAt=ctx.currentTime;
       runtime.position=()=>cue.loop?el.currentTime:Math.min(el.currentTime,cue.trimEnd);
       if(cue.loop){
-        runtime.timers.push(setInterval(()=>{if(el.currentTime>=cue.trimEnd-.015)el.currentTime=cue.trimStart;},8));
+        el.loop=true; // never runs off the end of the file
+        runtime.timers.push(setInterval(()=>{
+          if(el.currentTime>=cue.trimEnd-.015||el.currentTime<cue.trimStart-.05)el.currentTime=cue.trimStart;
+          if(el.paused&&!runtime.ended&&runtime.status!=="paused")el.play().catch(()=>{});
+        },8));
       }else{
         const endAt=ctx.currentTime+(cue.trimEnd-el.currentTime);
         gate.gain.setValueAtTime(1,ctx.currentTime); gate.gain.setValueAtTime(0,endAt);
-        runtime.timers.push(setTimeout(()=>finishCue(runtime),Math.max(0,(endAt-ctx.currentTime)*1000)+40));
+        audioTimer(runtime,endAt+.03,()=>finishCue(runtime));
         el.onended=()=>finishCue(runtime);
       }
-      runtime.halt=(at)=>{runtime.timers.push(setTimeout(()=>finishCue(runtime),Math.max(0,(at-ctx.currentTime)*1000)));};
+      runtime.halt=(at)=>audioTimer(runtime,at,()=>finishCue(runtime));
     }
 
     state.active.set(id,runtime);
@@ -1374,8 +1435,9 @@
     if(runtime.ended)return;
     runtime.ended=true;
     runtime.timers.forEach(t=>{clearTimeout(t);clearInterval(t);});
+    runtime.clocks.forEach(({clock,mute})=>{try{clock.onended=null;clock.stop();}catch{} try{clock.disconnect();mute.disconnect();}catch{}});
     if(runtime.kind==="media"){
-      try{runtime.el.onended=null;runtime.el.pause();}catch{}
+      try{runtime.el.onended=null;runtime.el.loop=false;runtime.el.pause();}catch{}
       try{runtime.media.node.disconnect();}catch{}
     }else{
       try{runtime.source.onended=null;runtime.source.stop();}catch{}
@@ -1392,12 +1454,12 @@
       }
       renderCueStates();
     }
-    if(runtime.kind==="media"&&!state.active.has(id)&&id!==state.armedId)releaseMedia(id);
+    if(runtime.kind==="media"&&!state.active.has(id)&&id!==state.armedId&&!state.starting.has(id))releaseMedia(id);
   }
 
   function stopCue(id,fadeSeconds=0,silent=false){
     const runtime=state.active.get(id);
-    if (!runtime) return;
+    if (!runtime){ if(state.starting.has(id))state.cancelled.add(id); return; }
     runtime.intentionalStop=true;
     if (runtime.status==="paused"){
       state.active.delete(id);
@@ -1405,7 +1467,7 @@
         const others=[...state.active.keys()];
         state.currentId=others.length?others[others.length-1]:null;
       }
-      if(runtime.kind==="media"&&id!==state.armedId)releaseMedia(id);
+      if(runtime.kind==="media"&&id!==state.armedId&&!state.starting.has(id))releaseMedia(id);
       if(!silent)renderCueStates();
       return;
     }
@@ -1430,6 +1492,7 @@
   }
 
   function stopAll(fade=0){
+    state.stopEpoch++; // cancels cues that are still starting
     stopAudition();
     [...state.active.keys()].forEach(id=>stopCue(id,fade));
   }
@@ -1518,16 +1581,21 @@
     const ch=ensureAuditionChain();
     if(ch.url)URL.revokeObjectURL(ch.url);
     ch.url=URL.createObjectURL(cue.blob);ch.el.src=ch.url;
-    ch.gain.gain.setValueAtTime(dbToGain(cue.gainDb),state.audioContext.currentTime);
-    const token={cueId:cue.id,raf:0};
+    const token={cueId:cue.id,raf:0,stopAt:Infinity};
     state.audition=token;
     els.waveAuditionBtn.textContent="■ Stop audition";
-    await seekMedia(ch.el,getEditorPlayhead(cue));
+    const ph=getEditorPlayhead(cue);
+    await seekMedia(ch.el,ph);
     if(state.audition!==token)return;
-    try{await ch.el.play();}catch(err){console.error(err);stopAudition();toast("Could not audition this file.");return;}
+    // Inside the cue: hear it as it will play (fades, stop at OUT). Outside: hear the raw file.
+    const now=state.audioContext.currentTime, target=dbToGain(cue.gainDb);
+    if(ph>=cue.trimStart&&ph<cue.trimEnd-.01){scheduleEnvelope(ch.gain.gain,cue,ph,now,target,cue.fadeIn);token.stopAt=cue.trimEnd;}
+    else{ch.gain.gain.cancelScheduledValues(now);ch.gain.gain.setValueAtTime(target,now);}
+    const ok=await Promise.race([ch.el.play().then(()=>true,()=>false),timeout(2000,false)]);
+    if(!ok){stopAudition();toast("Could not audition this file.");return;}
     const tick=()=>{
       if(state.audition!==token)return;
-      if(ch.el.paused||ch.el.ended){stopAudition();return;}
+      if(ch.el.paused||ch.el.ended||ch.el.currentTime>=token.stopAt){stopAudition();return;}
       setEditorPlayhead(cue,ch.el.currentTime);
       token.raf=requestAnimationFrame(tick);
     };
@@ -1818,7 +1886,7 @@
     toast("Show settings exported. Audio remains local.");
   }
 
-  function normaliseCue(meta,seen=new Set()){
+  function normaliseCue(meta,seen=new Set(),cleared=[]){
     const num=(v,d)=>{const n=Number(v);return Number.isFinite(n)?n:d;};
     const str=(v,d)=>typeof v==="string"?v:d;
     const curves=["linear","smooth","fast","slow"], modes=["none","stop","crossfade"];
@@ -1827,7 +1895,7 @@
     seen.add(id);
     const duration=Math.max(0,num(meta.duration,0));
     let hotkey=str(meta.hotkey,"");
-    if(RESERVED_KEYS.has(hotkey))hotkey="";
+    if(RESERVED_KEYS.has(hotkey)){cleared.push(hotkey);hotkey="";}
     return {
       id,name:str(meta.name,"Untitled cue"),fileName:str(meta.fileName,""),duration,
       color:/^#[0-9a-f]{6}$/i.test(meta.color||"")?meta.color:"#f4b942",hotkey,
@@ -1841,16 +1909,32 @@
     };
   }
 
+  // While the storage upgrade waits for another tab, nothing new may come in:
+  // its audio couldn't be saved.
+  function storageBusy(){
+    if(!state.dbBlocked)return false;
+    toast("Close the other CueDeck tab first, then try again.",5000);return true;
+  }
+
+  function noteClearedHotkeys(cleared){
+    if(!cleared.length)return;
+    const keys=[...new Set(cleared)].join(", ");
+    setTimeout(()=>toast(`${cleared.length} hotkey${cleared.length===1?"":"s"} (${keys}) now belong to show controls and were cleared. Reassign them with Learn key.`,7000),2600);
+  }
+
   async function importShowFile(file){
+    if(storageBusy())return;
     let data;
     try{
       data=JSON.parse(await file.text());
       if(!data||!Array.isArray(data.cues)) throw new Error("Invalid show");
     }catch(err){ toast("Could not import this show file. Nothing was changed."); return; }
+    if(state.cues.length&&!confirm("Importing replaces the current show. Audio for cues that aren't in the imported show is removed from this browser. Export the current show first if you need it. Continue?"))return;
     stopAll(0);releaseAllMedia();
     state.wavePeaks.clear();state.waveViews.clear();state.editorPlayheads.clear();state.loadPromises.clear();
-    const seen=new Set();
-    state.cues=data.cues.filter(c=>c&&typeof c==="object").map(c=>({...normaliseCue(c,seen),missing:false,loadState:"loading"}));
+    const seen=new Set(), cleared=[];
+    state.cues=data.cues.filter(c=>c&&typeof c==="object").map(c=>({...normaliseCue(c,seen,cleared),missing:false,loadState:"loading"}));
+    noteClearedHotkeys(cleared);
     state.globalTransitionMode=["cue","none","stop","crossfade"].includes(data.globalTransitionMode)
       ? data.globalTransitionMode : state.globalTransitionMode;
     state.globalTransitionTime=clamp(Number(data.globalTransitionTime ?? state.globalTransitionTime)||0,0,30);
@@ -1870,6 +1954,7 @@
   // Relinks every missing cue with a matching filename (duplicates included).
   // Files that match nothing are added as new cues.
   async function relinkFiles(files){
+    if(storageBusy())return;
     const matches=[],unmatched=[];
     for(const file of files){
       const cues=state.cues.filter(c=>c.missing && c.fileName===file.name);
@@ -2019,8 +2104,10 @@
   });
   $("fullscreenBtn").addEventListener("click",async()=>{
     try{
-      if(!document.fullscreenElement)await document.documentElement.requestFullscreen();
-      else await document.exitFullscreen();
+      if(!document.fullscreenElement){
+        await document.documentElement.requestFullscreen();
+        try{await navigator.keyboard?.lock?.(["Escape"]);}catch{}
+      }else{ try{navigator.keyboard?.unlock?.();}catch{} await document.exitFullscreen(); }
     }catch{}
   });
 
@@ -2028,12 +2115,14 @@
   ["dragleave","drop"].forEach(type=>els.dropzone.addEventListener(type,e=>{e.preventDefault();els.dropzone.classList.remove("drag");}));
   els.dropzone.addEventListener("drop",e=>{
     e.stopPropagation();
+    if(state.showMode){toast("Exit Show Mode to add audio.");return;}
     if(state.cues.some(c=>c.missing))relinkFiles(e.dataTransfer.files);else addFiles(e.dataTransfer.files);
   });
   document.addEventListener("dragover",e=>e.preventDefault());
   document.addEventListener("drop",e=>{
     if(e.target!==els.dropzone && e.dataTransfer.files.length){
       e.preventDefault();
+      if(state.showMode){toast("Exit Show Mode to add audio.");return;}
       if(state.cues.some(c=>c.missing))relinkFiles(e.dataTransfer.files);else addFiles(e.dataTransfer.files);
     }
   });
@@ -2172,8 +2261,9 @@
         if(!db.objectStoreNames.contains("project"))db.createObjectStore("project");
         if(!db.objectStoreNames.contains("peaks"))db.createObjectStore("peaks");
       };
-      req.onblocked=()=>toast("Another CueDeck tab is open. Close it to finish updating.",8000);
+      req.onblocked=()=>{state.dbBlocked=true;showBlocker(true);};
       req.onsuccess=()=>{
+        state.dbBlocked=false;showBlocker(false);
         state.db=req.result;
         state.db.onversionchange=()=>{state.db.close();state.db=null;toast("CueDeck was updated in another tab. Reload this one.",8000);};
         resolve(state.db);
@@ -2229,24 +2319,52 @@
   }
   function persistProject(){
     clearTimeout(state.saveTimer);state.saveTimer=null;
+    if(!state.restored)return; // never overwrite a saved show we haven't read yet
     const clean=state.cues.map(({buffer,blob,loadState,mode,...cue})=>cue);
-    try{localStorage.setItem("cuedeck-project",JSON.stringify(clean));}catch(err){console.error(err);}
+    const json=JSON.stringify(clean);
+    try{localStorage.setItem("cuedeck-project",json);localStorage.setItem("cuedeck-project-backup",json);}catch(err){console.error(err);}
   }
   function saveProject(immediate=false){
     clearTimeout(state.saveTimer);
     if(immediate){persistProject();return;}
     state.saveTimer=setTimeout(persistProject,180);
   }
-  async function restoreProject(){
-    const raw=localStorage.getItem("cuedeck-project");
-    if(!raw)return;
+  // Reads the saved cue list from localStorage only, so a database problem can't
+  // empty it. "cuedeck-project-backup" is written only by 2.0+, so if an older copy
+  // of CueDeck emptied the list, the backup brings it back.
+  function restoreProject(){
+    const read=k=>{try{return localStorage.getItem(k);}catch{return null;}};
+    const count=r=>{try{const a=JSON.parse(r);return Array.isArray(a)?a.length:-1;}catch{return -1;}};
+    let raw=read("cuedeck-project");
+    const backup=read("cuedeck-project-backup");
+    let fromBackup=false;
+    if(backup&&count(backup)>0&&count(raw)<=0){raw=backup;fromBackup=true;}
+    if(!raw){state.restored=true;return;}
     try{
       const saved=JSON.parse(raw);
-      const seen=new Set();
-      state.cues=(Array.isArray(saved)?saved:[]).filter(m=>m&&typeof m==="object").map(meta=>normaliseCue(meta,seen));
+      const seen=new Set(), cleared=[];
+      // Never trust a saved "missing" flag: try the stored audio again every load.
+      state.cues=(Array.isArray(saved)?saved:[]).filter(m=>m&&typeof m==="object")
+        .map(meta=>({...normaliseCue(meta,seen,cleared),missing:false,loadState:"loading"}));
       state.selectedId=state.cues[0]?.id||null;
       state.armedId=state.selectedId;
-    }catch(err){console.error(err);}
+      noteClearedHotkeys(cleared);
+      if(fromBackup)setTimeout(()=>toast("Your show was restored from CueDeck's backup copy.",6000),400);
+    }catch(err){
+      console.error(err);
+      try{localStorage.setItem("cuedeck-project-unreadable",raw);}catch{}
+      setTimeout(()=>toast("The saved show couldn't be read. A copy was kept; start a new show or import one.",7000),400);
+    }
+    state.restored=true;
+  }
+
+  function showBlocker(on){
+    let el=document.getElementById("dbBlocker");
+    if(on&&!el){
+      el=document.createElement("div");el.id="dbBlocker";el.className="modal-back open";el.style.zIndex="60";
+      el.innerHTML=`<div class="modal"><h3>Close other CueDeck tabs</h3><p>CueDeck is updating how it stores your show. Another CueDeck tab or window is still open in this browser. Close it and this one will continue on its own. Nothing has been changed.</p></div>`;
+      document.body.appendChild(el);
+    }else if(!on&&el)el.remove();
   }
 
   async function boot(){
@@ -2257,12 +2375,15 @@
     els.masterGain.value=state.masterDb;
     els.masterGainValue.textContent=`${state.masterDb.toFixed(1)} dB`;
     syncGlobalTransitionControls();
-    try{await openDb();await restoreProject();}catch(err){console.error(err);}
+    restoreProject();
     render();
     schedulePadLayout();
+    try{await openDb();}
+    catch(err){console.error(err);toast("This browser isn't letting CueDeck store audio. Your cue list is kept, but audio will need re-adding after a reload.",8000);}
     requestAnimationFrame(()=>hydrateCues());
   }
   window.addEventListener("beforeunload",persistProject);
+  window.addEventListener("pagehide",persistProject);
   // Test hook for tests/run_tests.py (only with ?test in the address).
   if(/[?&]test\b/.test(location.search))window.__cuedeck={state,getCue,startCue,stopCue,decodedBytes,APP_VERSION};
   boot();

@@ -10,7 +10,7 @@ A single-file browser audio cue player for live shows (school productions, VET L
 ## History
 - `3428c76`: Drive `CueDeck_v1_9.html` (ChatGPT, 1 Jul 2026), kept for reference.
 - `c5754cb`: the live Netlify file (ChatGPT v1.9 + waveform editor). Baseline for Claude's work.
-- `v2.0` branch: Claude's corrections C1–C21 (see `CORRECTIONS.md`).
+- `v2.0` branch: Claude's corrections C1–C21 and independent-check fixes IC1–IC13 (see `CORRECTIONS.md`).
 
 ## Editing rules
 - Keep it one self-contained file. No build step and no external requests.
@@ -21,4 +21,10 @@ A single-file browser audio cue player for live shows (school productions, VET L
 - `?test` in the address exposes `window.__cuedeck` for the test suite only.
 
 ## Not yet verified
-- Safari/iPad. The tests run in Chrome. Before the first show on an iPad: load a few cues, GO through them, try Audition, a crossfade and Show Mode.
+- Safari/iPad and Firefox. The tests run in Chrome. Before the first show on an iPad: load a few cues, GO through them, try Audition, a crossfade and Show Mode.
+
+## Publishing (Netlify drag-and-drop)
+1. On the live site, **Export show** first (a safety copy of the settings).
+2. Drag `index.html` onto the cue-deck-pro site in Netlify. Keep the same site so saved shows stay.
+3. Close any other CueDeck tabs, then reload. The show upgrades on its own.
+4. Don't roll back to an older version afterwards. If one does run, 2.0 restores the list from its backup the next time it opens.

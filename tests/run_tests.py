@@ -47,6 +47,8 @@ async def fresh(pw, wake_stub=False):
     page = await ctx.new_page()
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
+    page.dialog_answer = True
+    page.on("dialog", lambda d: asyncio.ensure_future(d.accept() if page.dialog_answer else d.dismiss()))
     await page.goto(URL); await page.wait_for_timeout(600)
     await page.mouse.click(700, 5)  # user gesture
     return ctx, page, errors
@@ -312,6 +314,112 @@ async def suite_99(pw, m):
     check("No page errors (99 cues)", not errors, "; ".join(errors[:3]))
     await ctx.close()
 
+SPACE = "window.dispatchEvent(new KeyboardEvent('keydown',{code:'Space',key:' ',bubbles:true}))"
+ESC = "window.dispatchEvent(new KeyboardEvent('keydown',{code:'Escape',key:'Escape',bubbles:true}))"
+
+async def suite_independent_check(pw, m):
+    """Regression tests for the independent check's findings (IC1–IC8, IC13)."""
+    ctx, page, errors = await fresh(pw)
+    longs = []
+    for i in range(3):
+        d = MEDIA / f"long{i}.wav"; shutil.copy(m["long"], d); longs.append(str(d))
+    await add(page, *longs, wait=6000)
+    # IC1: two GOs within the same moment on streamed cues
+    await click_cue(page, 0)
+    await page.evaluate(SPACE + ";" + SPACE); await page.wait_for_timeout(1200)
+    p1 = await playing(page)
+    await page.keyboard.press("Space"); await page.wait_for_timeout(800)
+    check("IC1 two instant GOs on long cues both play, and GO still works after", p1 == ["01", "02"] and await playing(page) == ["01", "02", "03"], f"{p1} then {await playing(page)}")
+    await escape(page)
+    await click_cue(page, 0)
+    await page.evaluate(SPACE + ";window.dispatchEvent(new KeyboardEvent('keydown',{code:'ArrowDown',key:'ArrowDown'}))"); await page.wait_for_timeout(1000)
+    await page.keyboard.press("Space"); await page.wait_for_timeout(800)
+    check("IC1 GO then an instant arrow key: playback keeps working", len(await playing(page)) >= 2, str(await playing(page)))
+    await escape(page)
+    # IC2: Escape straight after GO on a long cue
+    await click_cue(page, 0)
+    await page.evaluate(SPACE + ";" + ESC); await page.wait_for_timeout(1200)
+    check("IC2 Escape straight after GO stops a long cue that is still starting", await playing(page) == [], str(await playing(page)))
+    await page.evaluate("(()=>{const d=window.__cuedeck,c=d.state.cues[1];d.startCue(c.id);d.stopCue(c.id,0)})()"); await page.wait_for_timeout(1200)
+    check("IC2 the cue's own stop also cancels a start in progress", await playing(page) == [], str(await playing(page)))
+    # IC5: streamed loop whose OUT is the end of the file keeps looping
+    await page.evaluate("(()=>{const c=window.__cuedeck.state.cues[0];c.loop=true;c.trimStart=148;c.trimEnd=c.duration;window.__cuedeck.startCue(c.id)})()")
+    await page.wait_for_timeout(4500)
+    lp = await page.evaluate("[...window.__cuedeck.state.active.values()][0]?.position()")
+    check("IC5 streamed loop at the end of the file keeps looping", await playing(page) == ["01"] and lp is not None and 147.9 <= lp <= 150.1, f"{await playing(page)} pos {lp}")
+    await escape(page)
+    await page.evaluate("(()=>{const c=window.__cuedeck.state.cues[0];c.loop=false;c.trimStart=0;c.trimEnd=c.duration})()")
+    # IC6: Show Mode is read-only
+    await page.click("#showBtn"); await page.wait_for_timeout(900)
+    prevented = await page.evaluate("""(()=>{const r=document.querySelector('.cue[data-cue-id]');const e=new DragEvent('dragstart',{cancelable:true,bubbles:true,dataTransfer:new DataTransfer()});r.dispatchEvent(e);return e.defaultPrevented})()""")
+    check("IC6 cues can't be dragged in Show Mode", prevented)
+    await page.click("#showBtn"); await page.wait_for_timeout(300)
+    # IC8: audition inside the cue stops at OUT
+    await page.set_input_files("#fileInput", [m["t220"]]); await page.wait_for_timeout(1500)
+    await click_cue(page, 3)
+    await page.evaluate("(()=>{const d=window.__cuedeck,c=d.state.cues[3];c.trimEnd=2;d.state.editorPlayheads.set(c.id,1.5)})()")
+    await page.click("#waveAuditionBtn"); await page.wait_for_timeout(300)
+    on = await page.text_content("#waveAuditionBtn"); await page.wait_for_timeout(1200)
+    check("IC8 audition from inside the cue stops at OUT", "Stop" in on and (await page.text_content("#waveAuditionBtn")).startswith("▶"))
+    # IC13: cancelling the import confirmation keeps the show
+    bad = MEDIA / "other.json"; bad.write_text(json.dumps({"cues": [{"id": "z", "name": "Other", "hotkey": "F"}]}))
+    page.dialog_answer = False
+    await page.set_input_files("#showInput", str(bad)); await page.wait_for_timeout(800)
+    check("IC13 cancelling an import leaves the show untouched", await page.evaluate("window.__cuedeck.state.cues.length") == 4)
+    # IC7: a reserved hotkey from an imported show is cleared with a message
+    page.dialog_answer = True
+    await page.set_input_files("#showInput", str(bad)); await page.wait_for_timeout(3400)
+    t = await page.text_content("#toast")
+    check("IC7 a clashing old hotkey is cleared and the user is told", "were cleared" in t and await page.evaluate("window.__cuedeck.state.cues[0].hotkey") == "", t)
+    check("No page errors (independent-check fixes)", not errors, "; ".join(errors[:3]))
+    await ctx.close()
+
+async def suite_upgrade_and_storage(pw, m):
+    """IC3/IC4: the saved show survives database failure, old-version wipes and the v1→v2 upgrade."""
+    prof = tempfile.mkdtemp(prefix="cuedeck-up-")
+    kw = dict(headless=True, args=["--autoplay-policy=user-gesture-required"])
+    if CHROME: kw["executable_path"] = CHROME
+    ctx = await pw.chromium.launch_persistent_context(prof, **kw)
+    old = await ctx.new_page()
+    await old.goto(f"http://localhost:{PORT}/tests/fixtures/v1_live.html"); await old.wait_for_timeout(500); await old.mouse.click(700, 5)
+    await old.set_input_files("#fileInput", [m["t220"], m["t330"]]); await old.wait_for_timeout(2500)
+    # v2 opens while the old tab is still open → blocked upgrade
+    new = await ctx.new_page(); errors = []
+    new.on("pageerror", lambda e: errors.append(str(e)))
+    await new.goto(URL); await new.wait_for_timeout(1500)
+    blocked = await new.evaluate("!!document.getElementById('dbBlocker')")
+    kept = await new.evaluate("JSON.parse(localStorage.getItem('cuedeck-project')).length")
+    check("IC3 upgrade blocked by an old tab: app waits, saved show untouched", blocked and kept == 2, f"blocker {blocked}, saved {kept}")
+    await new.set_input_files("#fileInput", [m["right"]]); await new.wait_for_timeout(800)
+    check("IC3 while blocked, new audio is refused instead of being lost", await new.evaluate("window.__cuedeck.state.cues.length") == 2)
+    await old.close(); await new.wait_for_timeout(3000)
+    st = await new.evaluate("window.__cuedeck.state.cues.map(c=>c.loadState)")
+    check("IC3 old tab closed: v1 show upgrades with its audio", not await new.evaluate("!!document.getElementById('dbBlocker')") and st == ["ready", "ready"], str(st))
+    # IC4: a saved "missing" flag is retried
+    await new.evaluate("(()=>{const a=JSON.parse(localStorage.getItem('cuedeck-project'));a[0].missing=true;localStorage.setItem('cuedeck-project',JSON.stringify(a))})()")
+    await new.reload(); await new.wait_for_timeout(2500)
+    check("IC4 a cue saved as MISSING is retried and comes back", await new.evaluate("window.__cuedeck.state.cues[0].loadState") == "ready")
+    # IC3: the old version opened after the update (stale tab / rollback) empties the list → backup restores it
+    await new.close()
+    stale = await ctx.new_page()
+    await stale.goto(f"http://localhost:{PORT}/tests/fixtures/v1_live.html"); await stale.wait_for_timeout(2000)
+    wiped = await stale.evaluate("JSON.parse(localStorage.getItem('cuedeck-project')||'[]').length")
+    await stale.close()
+    back = await ctx.new_page(); await back.goto(URL); await back.wait_for_timeout(2500)
+    check("IC3 list emptied by the old version is restored from backup, audio intact",
+          wiped == 0 and await back.evaluate("window.__cuedeck.state.cues.map(c=>c.loadState)") == ["ready", "ready"]
+          and "backup" in (await back.text_content("#toast") or ""), f"old version left {wiped} cues")
+    await back.close()
+    # IC3: database won't open → list kept, not overwritten
+    await ctx.add_init_script("IDBFactory.prototype.open=function(){throw new Error('blocked by test')}")
+    p3 = await ctx.new_page(); await p3.goto(URL); await p3.wait_for_timeout(2000)
+    shown = await p3.evaluate("window.__cuedeck.state.cues.length")
+    await p3.evaluate("window.dispatchEvent(new Event('beforeunload'))")
+    saved = await p3.evaluate("JSON.parse(localStorage.getItem('cuedeck-project')).length")
+    check("IC3 database unavailable: cue list still shown and not wiped", shown == 2 and saved == 2, f"shown {shown}, saved {saved}")
+    check("No page errors (upgrade/storage)", not errors, "; ".join(errors[:3]))
+    await ctx.close()
+
 async def main():
     if not shutil.which("ffmpeg"): sys.exit("ffmpeg is required")
     m = make_media()
@@ -320,7 +428,7 @@ async def main():
     time.sleep(1)
     try:
         async with async_playwright() as pw:
-            for s in (suite_keys_transport, suite_wake, suite_memory_storage, suite_99):
+            for s in (suite_keys_transport, suite_wake, suite_memory_storage, suite_independent_check, suite_upgrade_and_storage, suite_99):
                 if "--quick" in sys.argv and s is suite_99: continue
                 try: await s(pw, m)
                 except Exception as e:
